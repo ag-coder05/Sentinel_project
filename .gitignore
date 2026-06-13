@@ -1,0 +1,9 @@
+# Local environment variables
+.env
+
+# Vector database binary storage files
+**/chroma_storage/
+
+# Python cache files
+__pycache__/
+*.pyc
