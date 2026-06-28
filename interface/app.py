@@ -1,33 +1,31 @@
 import streamlit as st
-import mysql.connector
 import sys
 import os
+import mysql.connector
+from mysql.connector import pooling
 from dotenv import load_dotenv
 
-# Initialize runtime path mappings so Streamlit can locate the backend hazard engine
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from processing.hazard_engine import get_cached_metrics, semantic_archive_search
-
+# 1. Load environment variables
 load_dotenv()
 
-st.set_page_config(page_title="Sentinel NGO Safety Command", layout="wide")
+# 2. Path resolution
+project_root = os.path.dirname(os.path.abspath(__file__))
+root_dir = os.path.dirname(project_root)
+sys.path.append(root_dir)
 
-# --- DATABASE CONNECTION POOLING ---
-@st.cache_resource
-def init_db_connection():
-    return mysql.connector.connect(
-        host=os.getenv("DB_HOST", "localhost"),
-        user=os.getenv("DB_USER", "root"),
-        password=os.getenv("DB_PASSWORD"),
-        database=os.getenv("DB_NAME", "sentinel_db")
-    )
+# 3. New Connection Pool Setup
+from db_helper import get_db_connection_config # Import the new helper
+from processing.hazard_engine import get_cached_metrics, semantic_archive_search
 
-try:
-    db_conn = init_db_connection()
-    cursor = db_conn.cursor(buffered=True, dictionary=True)
-except Exception as e:
-    st.error(f"❌ Core System Database Connectivity Failure: {e}")
-    st.stop()
+db_pool = mysql.connector.pooling.MySQLConnectionPool(
+    pool_name="sentinel_pool",
+    pool_size=5,
+    **get_db_connection_config()
+)
+
+def get_cursor():
+    conn = db_pool.get_connection()
+    return conn, conn.cursor(buffered=True, dictionary=True)
 
 # --- SESSION STATE INITIALIZATION ---
 if "logged_in" not in st.session_state:
@@ -40,86 +38,92 @@ if "ngo_name" not in st.session_state:
 # --- AUTHENTICATION INTERFACE LAYER ---
 if not st.session_state.logged_in:
     st.title("🛡️ Sentinel NGO Security Portal — Access Control")
-    st.markdown("Secure operational gateway tracking local human security crises and environmental hazard indices.")
-    
     auth_mode = st.radio("Select Portal Action", ["Sign In (Existing NGO)", "Sign Up (New NGO)"])
     
-    # 📯 SIGN UP MODE: NEW NGO REGISTRATION SYSTEM
+    # 📯 SIGN UP MODE: DYNAMIC MULTI-ENTRY REGISTRATION
     if auth_mode == "Sign Up (New NGO)":
-        st.subheader("Create NGO Master Profile & Provision New Tracking Region")
-        with st.form("registration_form", clear_on_submit=True):
-            new_id = st.text_input("Unique NGO ID (e.g., NGO_KOL_03, NGO_HW_02)").strip()
-            new_name = st.text_input("Official Agency Name").strip()
-            new_city = st.text_input("Desired Monitoring City (e.g., Bhubaneswar)").strip()
-            new_state = st.text_input("Desired Monitoring State (e.g., Odisha)").strip()
-            
-            submit_reg = st.form_submit_button("Register Agency Profile & Zone")
-            
-            if submit_reg:
-                if not new_id or not new_name or not new_city or not new_state:
-                    st.error("❌ Registration rejected. All entry fields must be populated.")
-                else:
-                    try:
-                        # 1. Look up or dynamically provision the new city target 
-                        cursor.execute("SELECT id FROM monitoring_targets WHERE location_name = %s", (new_city,))
-                        existing_target = cursor.fetchone()
+        st.subheader("Create NGO Master Profile & Provision Zones")
+        
+        # Track locations in session state so we don't lose them while typing
+        if 'reg_locations' not in st.session_state:
+            st.session_state.reg_locations = []
+
+        new_id = st.text_input("Unique NGO ID (e.g., NGO_KOL_03)").strip()
+        new_name = st.text_input("Official Agency Name").strip()
+        
+        st.markdown("---")
+        st.write("#### Add Monitoring Zones")
+        c1, c2, c3 = st.columns([2, 2, 1])
+        with c1: city_input = st.text_input("City", key="city_in")
+        with c2: state_input = st.text_input("State", key="state_in")
+        with c3:
+            st.write("##") # Spacer
+            if st.button("➕ Add"):
+                if city_input and state_input:
+                    st.session_state.reg_locations.append({'city': city_input, 'state': state_input})
+                    st.rerun()
+
+        # Display added locations
+        for i, loc in enumerate(st.session_state.reg_locations):
+            st.info(f"{i+1}. {loc['city']}, {loc['state']}")
+
+        if st.button("Finalize Registration"):
+            if not new_id or not new_name or not st.session_state.reg_locations:
+                st.error("❌ Please provide NGO details and at least one zone.")
+            else:
+                try:
+                    conn, cursor = get_cursor()
+                    for item in st.session_state.reg_locations:
+                        # 1. Get or Create City
+                        cursor.execute("SELECT id FROM monitoring_targets WHERE location_name = %s", (item['city'],))
+                        target = cursor.fetchone()
+                        target_id = target['id'] if target else None
                         
-                        if existing_target:
-                            target_id = existing_target['id']
-                        else:
-                            # Insert text attributes. Lat/Long stay NULL so your GeoPy pipeline patches them later
-                            cursor.execute("""
-                                INSERT INTO monitoring_targets (location_name, state, latitude, longitude) 
-                                VALUES (%s, %s, NULL, NULL)
-                            """, (new_city, new_state))
-                            db_conn.commit()
+                        if not target_id:
+                            cursor.execute("INSERT INTO monitoring_targets (location_name, state) VALUES (%s, %s)", (item['city'], item['state']))
                             target_id = cursor.lastrowid
                         
-                        # 2. Map structural relationship inside ngo_access table without passwords
+                        # 2. Map Relationship
                         cursor.execute("""
-                            INSERT INTO ngo_access (ngo_id, ngo_name, governed_location_id) 
+                            INSERT IGNORE INTO ngo_access (ngo_id, ngo_name, governed_location_id) 
                             VALUES (%s, %s, %s)
                         """, (new_id, new_name, target_id))
-                        db_conn.commit()
-                        
-                        # 3. Cache session data to route the user into the engine immediately
-                        st.session_state.logged_in = True
-                        st.session_state.ngo_id = new_id
-                        st.session_state.ngo_name = new_name
-                        st.success("🎉 Account and zone provisioned smoothly!")
-                        st.rerun()
-                        
-                    except Exception as reg_err:
-                        st.error(f"System registration write error: {reg_err}")
+                    
+                    conn.commit()
+                    cursor.close()
+                    conn.close()
+                    st.session_state.reg_locations = [] # Reset
+                    st.success("🎉 Profile created! Please switch to 'Sign In' to begin.")
+                except Exception as reg_err:
+                    st.error(f"System registration write error: {reg_err}")
 
-    # 🔑 SIGN IN MODE: TEAM LOGIN SYSTEM
+    # 🔑 SIGN IN MODE
     else:
         st.subheader("Operational Authentication")
         with st.form("login_form"):
-            login_id = st.text_input("Enter Registered NGO ID", value="NGO_KOL_01").strip()
+            login_id = st.text_input("Enter Registered NGO ID").strip()
             submit_login = st.form_submit_button("Authenticate Session")
             
             if submit_login:
-                if not login_id:
-                    st.error("❌ Please supply a valid NGO ID.")
+                conn, cursor = get_cursor()
+                cursor.execute("SELECT ngo_id, ngo_name FROM ngo_access WHERE ngo_id = %s LIMIT 1", (login_id,))
+                valid_user = cursor.fetchone()
+                cursor.close()
+                conn.close()
+                
+                if valid_user:
+                    st.session_state.logged_in = True
+                    st.session_state.ngo_id = valid_user['ngo_id']
+                    st.session_state.ngo_name = valid_user['ngo_name']
+                    st.rerun()
                 else:
-                    # Validate active identification directly inside the relationship model
-                    cursor.execute("""
-                        SELECT ngo_id, ngo_name FROM ngo_access 
-                        WHERE ngo_id = %s LIMIT 1
-                    """, (login_id,))
-                    valid_user = cursor.fetchone()
-                    
-                    if valid_user:
-                        st.session_state.logged_in = True
-                        st.session_state.ngo_id = valid_user['ngo_id']
-                        st.session_state.ngo_name = valid_user['ngo_name']
-                        st.rerun()
-                    else:
-                        st.error("❌ Invalid ID. No records match this identifier.")
+                    st.error("❌ Invalid ID.")
     st.stop()
 
 # --- MAIN SYSTEM INTERFACE LAYER (Triggers post-login) ---
+
+
+    
 st.sidebar.title("🛡️ Sentinel Control")
 st.sidebar.markdown(f"**Agency:** `{st.session_state.ngo_name}`")
 st.sidebar.markdown(f"**ID:** `{st.session_state.ngo_id}`")
@@ -127,13 +131,19 @@ st.sidebar.markdown("---")
 
 # 📡 SECTION C: RELATIONALLY SCOPED LOCATION SELECTOR
 # Fetch BOTH the ID and the name from the database row to build our dynamic key-value map
-cursor.execute("""
-    SELECT mt.id, mt.location_name FROM monitoring_targets mt
-    JOIN ngo_access na ON mt.id = na.governed_location_id
-    WHERE na.ngo_id = %s
-""", (st.session_state.ngo_id,))
-db_rows = cursor.fetchall()
-
+try:
+    conn, cursor = get_cursor()
+    cursor.execute("""
+        SELECT mt.id, mt.location_name FROM monitoring_targets mt
+        JOIN ngo_access na ON mt.id = na.governed_location_id
+        WHERE na.ngo_id = %s
+    """, (st.session_state.ngo_id,))
+    db_rows = cursor.fetchall()
+    cursor.close()
+    conn.close() 
+except Exception as e:
+    st.error(f"Database error: {e}")
+    st.stop()
 if not db_rows:
     st.warning("⚠️ This NGO profile does not have any authorized deployment zones assigned. Contact the database admin.")
     if st.sidebar.button("Logout"):
@@ -161,7 +171,15 @@ st.markdown("A unified, performance-optimized workspace tracking machine learnin
 
 # Fetch computed parameters directly from the pre-calculated predictive cache table
 # We pass the city name here to keep consistency with your backend metrics helper
-row = get_cached_metrics(city_selection, cursor)
+try:
+    conn_metrics, cursor_metrics = get_cursor()
+    # Now use this specific cursor
+    row = get_cached_metrics(city_selection, cursor_metrics)
+    cursor_metrics.close()
+    conn_metrics.close()
+except Exception as e:
+    st.error(f"Error fetching dashboard metrics: {e}")
+    row = None
 
 if not row:
     st.info(
@@ -242,24 +260,36 @@ else:
             if search_query.strip() == "":
                 st.warning("Please enter a keyword phrase to search against.")
             else:
-                with st.spinner("Polling local vector database blocks..."):
-                    # Pass the newly resolved numerical location ID directly to your vector client
-                    search_results = semantic_archive_search(search_query, selected_zone_id)
-                
-                if not search_results:
-                    st.info("No matching structural data records found inside local vector space storage blocks.")
-                else:
-                    st.success(f"Top matches retrieved for: '{search_query}'")
-                    for idx, item in enumerate(search_results):
-                        with st.container():
-                            st.markdown(f"### 🔍 Safety Archive Match {idx+1}")
-                            
-                            display_text = item.get('document') or item.get('headline') or "No textual content recorded."
-                            st.markdown(f"**Archived Context Data:** *\"{display_text}\"*")
-                            
-                            if 'score' in item:
-                                st.caption(f"Vector Distance Correlation Score: {item['score']:.4f}")
+                try:
+                    with st.spinner("Polling local vector database blocks..."):
+                        # 1. Get a fresh connection and cursor from the pool
+                        conn, cursor = get_cursor()
+                        
+                        # 2. Pass the cursor to your search function
+                        search_results = semantic_archive_search(search_query, selected_zone_id, cursor)
+                        
+                        # 3. Clean up the connection immediately
+                        cursor.close()
+                        conn.close() 
+                    
+                    # 4. Process and display results
+                    if not search_results:
+                        st.info("No matching structural data records found inside local vector space storage blocks.")
+                    else:
+                        st.success(f"Top matches retrieved for: '{search_query}'")
+                        for idx, item in enumerate(search_results):
+                            with st.container():
+                                st.markdown(f"### 🔍 Safety Archive Match {idx+1}")
                                 
-                            st.markdown("- **Metadata Context:**")
-                            st.json(item.get('metadata', {}))
-                            st.markdown("---")
+                                display_text = item.get('document') or item.get('headline') or "No textual content recorded."
+                                st.markdown(f"**Archived Context Data:** *\"{display_text}\"*")
+                                
+                                if 'score' in item:
+                                    st.caption(f"Vector Distance Correlation Score: {item['score']:.4f}")
+                                    
+                                st.markdown("- **Metadata Context:**")
+                                st.json(item.get('metadata', {}))
+                                st.markdown("---")
+
+                except Exception as e:
+                    st.error(f"Search failed due to a database connection issue: {e}")

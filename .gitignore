@@ -1,9 +1,11 @@
-# Local environment variables
+# Local environment and secrets
 .env
 
-# Vector database binary storage files
-**/chroma_storage/
+# Local data that shouldn't be in Git
+processing/vector_indexing/chroma_storage/
+safety_model.joblib
 
-# Python cache files
+# OS/System files
 __pycache__/
 *.pyc
+.DS_Store

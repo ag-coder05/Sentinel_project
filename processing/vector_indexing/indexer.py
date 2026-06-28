@@ -1,5 +1,5 @@
 import os
-import mysql.connector
+import sys
 import chromadb
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
@@ -13,14 +13,11 @@ vector_folder = os.path.join(current_dir, 'chroma_storage')
 
 # Step up two levels to find the .env file in the root project directory
 project_root = os.path.dirname(os.path.dirname(current_dir))
+sys.path.append(project_root)
 load_dotenv(os.path.join(project_root, '.env'))
 
-db_config = {
-    "host": os.getenv("DB_HOST", "localhost"),
-    "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASSWORD"),
-    "database": os.getenv("DB_NAME", "sentinel_db")
-}
+from db_helper import get_db_connection
+
 
 print(f" Attaching to Local ChromaDB Instance path: {vector_folder}")
 chroma_client = chromadb.PersistentClient(path=vector_folder)
@@ -29,7 +26,7 @@ collection = chroma_client.get_or_create_collection(name="regional_safety_vector
 
 def synchronize_vectors():
     print(" Mapping Database Signals to Dense Spatial Vectors...")
-    conn = mysql.connector.connect(**db_config)
+    conn = get_db_connection()
     cursor = conn.cursor()
     
     # Updated to extract s.location_id directly from the database rows
@@ -37,6 +34,7 @@ def synchronize_vectors():
         SELECT s.id, s.title, m.location_name, s.category, s.is_relevant, s.is_regional, s.location_id 
         FROM safety_signals s
         INNER JOIN monitoring_targets m ON s.location_id = m.id
+        WHERE s.category != 'Unclassified'
     """
     cursor.execute(query)
     rows = cursor.fetchall()
@@ -65,8 +63,8 @@ def synchronize_vectors():
             "is_regional": int(reg if reg is not None else 0)
         })
         
-    print(f" Encoding {len(documents)} elements with all-MiniLM-L6-v2 on local CPU...")
-    embeddings = embedding_model.encode(documents).tolist()
+    print(f" Encoding in batches...")
+    embeddings = embedding_model.encode(documents, batch_size=32, show_progress_bar=True).tolist()
     
     # Overwrites the old metadata-less structure completely
     collection.upsert(

@@ -1,31 +1,33 @@
 import os
+import sys
 import time
+
 from datetime import datetime
-import mysql.connector
+
+from dotenv import load_dotenv
+
+# 1. Setup path to access root files
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+sys.path.append(project_root)
+
+# 2. Load Environment Variables from root .env
+load_dotenv(os.path.join(project_root, '.env'))
+
+# 3. Import your Helper and other libraries
+from db_helper import get_db_connection
 from gnews import GNews
 from geopy.geocoders import Nominatim
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-from dotenv import load_dotenv
 
-# Path routing from sentinel_project/ingestion/ down to root .env
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(current_dir)
-load_dotenv(os.path.join(project_root, '.env'))
-
-db_config = {
-    "host": os.getenv("DB_HOST", "localhost"),
-    "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASSWORD"),
-    "database": os.getenv("DB_NAME", "sentinel_db")
-}
-
+# 4. Initialize services
 google_news = GNews(language='en', country='IN', period='14d')
 geolocator = Nominatim(user_agent="sentinel_crisis_monitor")
 analyzer = SentimentIntensityAnalyzer()
 
 def run_unrestricted_ingestion():
     print(" Initializing Dynamic Data Ingestion Pipeline...")
-    conn = mysql.connector.connect(**db_config)
+    conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
     
     cursor.execute("SELECT id, location_name, state, latitude, longitude FROM monitoring_targets")
@@ -84,6 +86,9 @@ def run_unrestricted_ingestion():
                     (title, source, timestamp, location_id, compound_score, sentiment_negative, category, is_relevant) 
                     VALUES (%s, %s, %s, %s, %s, %s, 'Unclassified', 1)
                 """
+
+                
+
                 cursor.execute(insert_sql, (title, source, formatted_timestamp, target_id, compound_score, negative_score))
                 if cursor.rowcount > 0:
                     inserted_count += 1

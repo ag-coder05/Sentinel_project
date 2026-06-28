@@ -1,7 +1,7 @@
 import os
 import json
 import time
-import mysql.connector
+import sys
 from google import genai  # Upgraded to the modern production SDK
 from google.genai import types
 import google.api_core.exceptions
@@ -9,21 +9,18 @@ from dotenv import load_dotenv
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
+sys.path.append(project_root)
 load_dotenv(os.path.join(project_root, '.env'))
 
-db_config = {
-    "host": os.getenv("DB_HOST", "localhost"),
-    "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASSWORD"),
-    "database": os.getenv("DB_NAME", "sentinel_db")
-}
+from db_helper import get_db_connection
+
 
 # Unified client initialization (automatically pulls GEMINI_API_KEY from your .env)
 ai_client = genai.Client()
 
 def run_batch_refinery():
     print("🚀 Launching Context-Aware AI Classification Refinery...")
-    conn = mysql.connector.connect(**db_config)
+    conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
     
     # 1. Pull only what needs work
@@ -79,7 +76,12 @@ def run_batch_refinery():
             )
             
             # Read clean text straight out of the modern API schema structure
-            results = json.loads(response.text.strip())
+            try:
+                results = json.loads(response.text.strip())
+            except json.JSONDecodeError:
+                print(" Gemini returned invalid JSON. Skipping this batch.")
+                time.sleep(5)
+                continue # Skip to next batch
             
             update_sql = """
                 UPDATE safety_signals 

@@ -1,45 +1,32 @@
 import os
+import sys
 import math
-import mysql.connector
-import numpy as np
+import joblib
 from datetime import datetime
+from google import genai
 from dotenv import load_dotenv
-from google import genai  # Standardized modern SDK
-from sklearn.ensemble import RandomForestRegressor
 
-# Load environment configurations explicitly from your local .env file
-load_dotenv()
+# PATH FIX
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+sys.path.append(project_root)
+load_dotenv(os.path.join(project_root, '.env'))
+from db_helper import get_db_connection
 
 def run_predictive_analytics():
-    # Initialize the modern, unified Gemini Client
-    ai_client = genai.Client() # Automatically reads GEMINI_API_KEY from .env
+    # Load the pre-trained model
+    if not os.path.exists('safety_model.joblib'):
+        print("❌ Error: 'safety_model.joblib' not found. Run train_model.py first!")
+        return
     
-    db_host = os.getenv("DB_HOST", "localhost")
-    db_user = os.getenv("DB_USER", "root")
-    db_password = os.getenv("DB_PASSWORD") 
-    db_name = os.getenv("DB_NAME", "sentinel_project")
-
-    # Establish clean database connectivity
-    conn = mysql.connector.connect(
-        host=db_host,
-        user=db_user,
-        password=db_password,
-        database=db_name
-    )
+    ml_model = joblib.load('safety_model.joblib')
+    ai_client = genai.Client()
+    
+    conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
 
-    print("🔄 Fetching target deployment locations...")
     cursor.execute("SELECT id, location_name FROM monitoring_targets")
     cities = cursor.fetchall()
-
-    # TRAIN MATHEMATICAL DECAY FORECASTER
-    X_train = np.array([[0], [12], [24], [48], [72], [168]])
-    y_train = np.array([1.0, 0.78, 0.62, 0.38, 0.24, 0.05])
-
-    # Named 'ml_model' to completely isolate it from the AI namespace
-    ml_model = RandomForestRegressor(n_estimators=50, random_state=42)
-    ml_model.fit(X_train, y_train)
-
     now = datetime.now()
 
     for city in cities:
