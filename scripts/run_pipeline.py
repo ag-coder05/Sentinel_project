@@ -10,12 +10,15 @@ from processing.vector_indexing import indexer
 
 def main():
     print("Starting Pipeline")
-    
-    vacuum_service.run() 
-    gemini_processor.run()
-    predictive_model.run()
-    indexer.run()
-    print("Pipeline Completed.")
+    try:
+        vacuum_service.run() 
+        gemini_processor.run()
+        predictive_model.run()
+        indexer.run()
+        print("Pipeline Completed.")
+    except Exception as e:
+        print(f"❌ Pipeline Failed: {e}")
+        exit(1)
 
 if __name__ == "__main__":
     main()
