@@ -1,35 +1,30 @@
 import os
 import sys
-import chromadb
+from pinecone import Pinecone
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 
-# 1. PATH CONFIGURATION FOR YOUR ARCHITECTURE
-# Points directly to: sentinel_project/processing/vector_indexing/
-current_dir = os.path.dirname(os.path.abspath(__file__)) 
-
-# Saves chroma folder directly inside vector_indexing/
-vector_folder = os.path.join(current_dir, 'chroma_storage')
-
-# Step up two levels to find the .env file in the root project directory
+# Path configuration
+current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(os.path.dirname(current_dir))
 sys.path.append(project_root)
+
+# Load .env from project root
 load_dotenv(os.path.join(project_root, '.env'))
 
 from db_helper import get_db_connection
 
+# Initialize Pinecone using environment variables
+pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+index = pc.Index(host=os.getenv("PINECONE_HOST"))
 
-print(f" Attaching to Local ChromaDB Instance path: {vector_folder}")
-chroma_client = chromadb.PersistentClient(path=vector_folder)
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-collection = chroma_client.get_or_create_collection(name="regional_safety_vectors")
 
-def synchronize_vectors():
-    print(" Mapping Database Signals to Dense Spatial Vectors...")
+def run():
+    print(" Mapping Database Signals to Cloud Pinecone Vectors...")
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Updated to extract s.location_id directly from the database rows
     query = """
         SELECT s.id, s.title, m.location_name, s.category, s.is_relevant, s.is_regional, s.location_id 
         FROM safety_signals s
@@ -40,42 +35,55 @@ def synchronize_vectors():
     rows = cursor.fetchall()
     
     if not rows:
-        print(" Vectors clear: No source records extracted from MySQL.")
+        print(" No records to sync.")
         cursor.close()
         conn.close()
         return
         
-    ids = []
-    documents = []
-    metadatas = []
+
+    vectors_to_upsert = []
+    print(f" Encoding {len(rows)} signals...")
     
     for row in rows:
         row_id, title, loc_name, cat, rel, reg, loc_id = row
-        ids.append(f"signal_{row_id}")
-        documents.append(title)
         
-        # Updated to pass the crucial numerical filter key
-        metadatas.append({
-            "location_id": int(loc_id),
-            "location_name": str(loc_name),
-            "category": str(cat),
-            "is_relevant": int(rel if rel is not None else 1),
-            "is_regional": int(reg if reg is not None else 0)
+        # --- THE GATEKEEPER ---
+        # 1. Skip records labeled 'Irrelevant'
+        if str(cat).strip() == 'Irrelevant':
+            continue
+            
+        # 2. Skip or sanitize records with no title
+        if not title or title.strip() == "":
+            print(f"Skipping record {row_id} due to missing title.")
+            continue
+        # --- END OF GATEKEEPER ---
+        
+        embedding = embedding_model.encode(title).tolist()
+        
+        vectors_to_upsert.append({
+            "id": f"signal_{row_id}",
+            "values": embedding,
+            "metadata": {
+                "title": str(title),  # <--- ADD THIS LINE
+                "location_id": int(loc_id),
+                "location_name": str(loc_name),
+                "category": str(cat),
+                "is_relevant": int(rel or 1),
+                "is_regional": int(reg or 0)
+            }
         })
-        
-    print(f" Encoding in batches...")
-    embeddings = embedding_model.encode(documents, batch_size=32, show_progress_bar=True).tolist()
     
-    # Overwrites the old metadata-less structure completely
-    collection.upsert(
-        ids=ids,
-        embeddings=embeddings,
-        documents=documents,
-        metadatas=metadatas
-    )
+    # Upsert to Pinecone
+    if vectors_to_upsert:
+        index.upsert(vectors=vectors_to_upsert)
+        print(f" Synced {len(vectors_to_upsert)} clean vectors.")
+    else:
+        print(" No clean records to upsert.")
+    
+    
     cursor.close()
     conn.close()
-    print(f" ChromaDB Semantic Vector Storage Completely Synced. Current Count: {collection.count()}")
+    print(" Pinecone Semantic Vector Storage Synced.")
 
 if __name__ == "__main__":
-    synchronize_vectors()
+    run()

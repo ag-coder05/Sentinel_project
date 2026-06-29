@@ -1,27 +1,34 @@
 import streamlit as st
-import sys
+
 import os
+from dotenv import load_dotenv
+load_dotenv()
+import sys
 import mysql.connector
 from mysql.connector import pooling
-from dotenv import load_dotenv
 
-# 1. Load environment variables
-load_dotenv()
 
-# 2. Path resolution
+#Path resolution
 project_root = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.dirname(project_root)
 sys.path.append(root_dir)
-
-# 3. New Connection Pool Setup
-from db_helper import get_db_connection_config # Import the new helper
+from utils import get_safe_secret
+from db_helper import get_db_connection_config 
 from processing.hazard_engine import get_cached_metrics, semantic_archive_search
 
-db_pool = mysql.connector.pooling.MySQLConnectionPool(
-    pool_name="sentinel_pool",
-    pool_size=5,
-    **get_db_connection_config()
-)
+
+#Connection Pool Setup using st.secrets
+
+@st.cache_resource
+def get_db_pool():
+    
+    return mysql.connector.pooling.MySQLConnectionPool(
+        pool_name="sentinel_pool",
+        pool_size=5,
+        **get_db_connection_config() 
+    )
+
+db_pool = get_db_pool()
 
 def get_cursor():
     conn = db_pool.get_connection()

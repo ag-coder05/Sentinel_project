@@ -1,21 +1,28 @@
 import os
 import logging
-import chromadb
+import sys
+import streamlit as st
+
 from sentence_transformers import SentenceTransformer
 
+root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(root_dir)
+from utils import get_safe_secret
+from pinecone import Pinecone
 # Silence logs
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 logging.getLogger("transformers").setLevel(logging.ERROR)
 
-# Setup path: relative to THIS file in the processing/ folder
-current_dir = os.path.dirname(os.path.abspath(__file__))
-vector_folder = os.path.join(current_dir, 'vector_indexing', 'chroma_storage')
 
-print(f"📡 Hazard Engine connecting to vector space at: {vector_folder}")
-chroma_client = chromadb.PersistentClient(path=vector_folder)
-collection = chroma_client.get_or_create_collection(name="regional_safety_vectors")
+# 1. CACHED PINECONE INITIALIZATION
+@st.cache_resource
+def get_pinecone_index():
+    """Initializes and returns the Pinecone index object once."""
+    api_key = get_safe_secret("PINECONE_API_KEY")
+    host = get_safe_secret("PINECONE_HOST")
+    return Pinecone(api_key=api_key).Index(host=host)
 
-# Lazy loading model
+# 2. CACHED MODEL LOADING
 _embedding_model = None
 def get_model():
     global _embedding_model
@@ -35,29 +42,29 @@ def get_cached_metrics(city_name, cursor):
 
 def semantic_archive_search(query_text, location_id, cursor, limit=3):
     model = get_model()
+    index = get_pinecone_index()  # Call the cached function here
+    
     try:
-        query_vector = model.encode([query_text]).tolist()
+        query_vector = model.encode([query_text]).tolist()[0]
         
-        # Use $or to check both Int and String in one pass
-        results = collection.query(
-            query_embeddings=query_vector, 
-            n_results=limit,
-            where={"$or": [
-                {"location_id": int(location_id)},
-                {"location_id": str(location_id)}
-            ]}
+        # Pinecone query
+        search_results = index.query(
+            vector=query_vector,
+            top_k=limit,
+            filter={"location_id": {"$eq": int(location_id)}},
+            include_metadata=True
         )
         
         formatted_results = []
-        if results and results['documents'] and len(results['documents'][0]) > 0:
-            for i in range(len(results['documents'][0])):
+        if search_results and 'matches' in search_results:
+            for match in search_results['matches']:
                 formatted_results.append({
-                    "document": results['documents'][0][i],
-                    "metadata": results['metadatas'][0][i] if results['metadatas'] else {},
-                    "score": results['distances'][0][i] if 'distances' in results and results['distances'] else 0.0
+                    "document": match.get('metadata', {}).get('title', 'No Title'),
+                    "metadata": match.get('metadata', {}),
+                    "score": match.get('score', 0.0)
                 })
         return formatted_results
 
     except Exception as e:
-        print(f"❌ Core Vector Database Query Exception: {e}")
+        print(f"❌ Core Pinecone Query Exception: {e}")
         return []

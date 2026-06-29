@@ -3,7 +3,7 @@
 
 # Local data that shouldn't be in Git
 processing/vector_indexing/chroma_storage/
-safety_model.joblib
+
 
 # OS/System files
 __pycache__/

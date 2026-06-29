@@ -12,8 +12,10 @@ project_root = os.path.dirname(current_dir)
 sys.path.append(project_root)
 load_dotenv(os.path.join(project_root, '.env'))
 from db_helper import get_db_connection
+from utils import get_safe_secret
+os.environ["GOOGLE_API_KEY"] = get_safe_secret("GEMINI_API_KEY")
 
-def run_predictive_analytics():
+def run():
     # Load the pre-trained model
     if not os.path.exists('safety_model.joblib'):
         print("❌ Error: 'safety_model.joblib' not found. Run train_model.py first!")
@@ -43,7 +45,7 @@ def run_predictive_analytics():
 
         active_count = len(signals)
         if active_count == 0:
-            print(f"➖ Zero active signals processed for {city_name}. Skipping profile.")
+            print(f" Zero active signals processed for {city_name}. Skipping profile.")
             continue
 
         total_weighted_severity = 0.0
@@ -135,4 +137,4 @@ def run_predictive_analytics():
     conn.close()
 
 if __name__ == "__main__":
-    run_predictive_analytics()
+    run()

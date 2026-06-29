@@ -25,7 +25,7 @@ google_news = GNews(language='en', country='IN', period='14d')
 geolocator = Nominatim(user_agent="sentinel_crisis_monitor")
 analyzer = SentimentIntensityAnalyzer()
 
-def run_unrestricted_ingestion():
+def run():
     print(" Initializing Dynamic Data Ingestion Pipeline...")
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
@@ -105,4 +105,4 @@ def run_unrestricted_ingestion():
     print(" Ingestion Layer Execution Concluded.")
 
 if __name__ == "__main__":
-    run_unrestricted_ingestion()
+    run()

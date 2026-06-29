@@ -7,18 +7,19 @@ from google.genai import types
 import google.api_core.exceptions
 from dotenv import load_dotenv
 
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.append(project_root)
 load_dotenv(os.path.join(project_root, '.env'))
 
 from db_helper import get_db_connection
-
-
+from utils import get_safe_secret
+os.environ["GOOGLE_API_KEY"] = get_safe_secret("GEMINI_API_KEY")
 # Unified client initialization (automatically pulls GEMINI_API_KEY from your .env)
 ai_client = genai.Client()
 
-def run_batch_refinery():
+def run():
     print("🚀 Launching Context-Aware AI Classification Refinery...")
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
@@ -109,4 +110,4 @@ def run_batch_refinery():
     print("🏁 Context-Aware Classification processing completed safely.")
 
 if __name__ == "__main__":
-    run_batch_refinery()
+    run()

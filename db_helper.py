@@ -1,7 +1,7 @@
 import os
 import mysql.connector
 from dotenv import load_dotenv
-
+from utils import get_safe_secret
 def get_db_connection():
     load_dotenv()
     # 1. Try to get secrets from Environment Variables first (Always works locally & in Actions)
@@ -52,12 +52,12 @@ def get_db_connection():
     )
 def get_db_connection_config():
     """Returns configuration dictionary for connection pooling in app.py"""
-    load_dotenv()
+    # We no longer need load_dotenv() here because get_safe_secret handles it
     return {
-        "host": os.environ.get("DB_HOST"),
-        "user": os.environ.get("DB_USER"),
-        "password": os.environ.get("DB_PASSWORD"),
-        "database": os.environ.get("DB_NAME", "test"),
-        "port": int(os.environ.get("DB_PORT", 4000)),
+        "host": get_safe_secret("DB_HOST"),
+        "user": get_safe_secret("DB_USER"),
+        "password": get_safe_secret("DB_PASSWORD"),
+        "database": get_safe_secret("DB_NAME"), # You can put "test" as default in get_safe_secret or here
+        "port": int(get_safe_secret("DB_PORT") or 4000),
         "ssl_disabled": False
     }
